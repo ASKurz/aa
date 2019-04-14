@@ -1,0 +1,558 @@
+---
+title: "Ch. 4 Linear Models"
+author: "A Solomon Kurz"
+date: "`r format(Sys.Date())`"
+output:
+  github_document
+---
+
+```{r set-options_04, echo = F, cache = F}
+options(width = 100)
+```
+
+# Linear Models
+
+> Linear regression is the geocentric model of applied statistics. By "linear regression", we will mean a family of simple statistical golems that attempt to learn about the mean and variance of some measurement, using an additive combination of other measurements. Like geocentrism, linear regression can usefully describe a very large variety of natural phenomena. Like geocentrism, linear is a descriptive model that corresponds to many different process models. If we read its structure too literally, we’re likely to make mistakes. But used wisely, these little linear golems continue to be useful. (p. 71)
+## Why normal distributions are normal
+
+After laying out his soccer field coin toss shuffle premise, McElreath wrote:
+
+> It's hard to say where any individual person will end up, but you can say with great confidence what the collection of positions will be. The distances will be distributed in approximately normal, or Gaussian, fashion. This is true even though the underlying distribution is binomial. It does this because there are so many more possible ways to realize a sequence of left-right steps that sums to zero. There are slightly fewer ways to realize a sequence that ends up one step left or right of zero, and so on, with the number of possible sequences declining in the characteristic bell curve of the normal distribution. (p. 72)
+### Normal by addition.
+
+Here's a way to do the simulation necessary for the plot in the top panel of Figure 4.2.
+
+```{r, warning = F, message = F}
+library(tidyverse)
+# We set the seed to make the results of `runif()` reproducible.
+set.seed(4)
+pos <- 
+  replicate(100, runif(16, -1, 1)) %>%        # Here's the simulation
+  as_tibble() %>%                             # For data manipulation, we'll make this a tibble
+  rbind(0, .) %>%                             # Here we add a row of zeros above the simulation results
+  mutate(step = 0:16) %>%                     # This adds a step index
+  gather(key, value, -step) %>%               # Here we convert the data to the long format
+  mutate(person = rep(1:100, each = 17)) %>%  # This adds a person id index
+  # The next two lines allow us to make cumulative sums within each person
+  group_by(person) %>%
+  mutate(position = cumsum(value)) %>%
+  ungroup()  # Ungrouping allows for further data manipulation
+```
+
+We might `glimpse()` at the data.
+
+```{r}
+glimpse(pos)
+```
+
+And here's the actual plot code.
+
+```{r, fig.height = 2, fig.width = 6.4}
+ggplot(data = pos, 
+       aes(x = step, y = position, group = person)) +
+  geom_vline(xintercept = c(4, 8, 16), linetype = 2) +
+  geom_line(aes(color = person < 2, alpha  = person < 2)) +
+  scale_color_manual(values = c("skyblue4", "black")) +
+  scale_alpha_manual(values = c(1/5, 1)) +
+  scale_x_continuous("step number", breaks = c(0, 4, 8, 12, 16)) +
+  theme(legend.position = "none")
+```
+
+Here's the code for the bottom three plots of Figure 4.2.
+
+```{r, fig.width = 3.25, fig.height = 3}
+# Figure 4.2.a.
+pos %>%
+  filter(step == 4) %>%
+  ggplot(aes(x = position)) +
+  geom_line(stat = "density", color = "dodgerblue1") +
+  coord_cartesian(xlim = -6:6) +
+  labs(title = "4 steps")
+# Figure 4.2.b.
+pos %>%
+  filter(step == 8) %>%
+  ggplot(aes(x = position)) +
+  geom_density(color = "dodgerblue2") +
+  coord_cartesian(xlim = -6:6) +
+  labs(title = "8 steps")
+# An intermediary step to get an SD value
+pos %>%
+  filter(step == 16) %>%
+  summarise(sd = sd(position))
+# Figure 4.2.c.
+pos %>%
+  filter(step == 16) %>%
+  ggplot(aes(x = position)) +
+  stat_function(fun = dnorm, 
+                args = list(mean = 0, sd = 2.180408),
+                linetype = 2) +  # 2.180408 came from the previous code block
+  geom_density(color = "transparent", fill = "dodgerblue3", alpha = 1/2) +
+  coord_cartesian(xlim = -6:6) +
+  labs(title = "16 steps",
+       y     = "density")
+```
+
+While we were at it, we explored a few ways to express densities. The main action was with the `geom_line()`, `geom_density()`, and `stat_function()` functions.
+
+### Normal by multiplication.
+
+Here's McElreath's simple random growth rate.
+
+```{r}
+set.seed(4)
+prod(1 + runif(12, 0, 0.1))
+```
+
+In the `runif()` part of that code, we generated 12 random draws from the uniform distribution with bounds $[0, 0.1]$. Within the `prod()` function, we first added `1` to each of those values and then computed their product. Consider a more explicit variant of the code.
+
+```{r}
+set.seed(4)
+tibble(a   = 1,
+       b   = runif(12, 0, 0.1)) %>% 
+  mutate(c = a + b) %>% 
+  summarise(p = prod(c))
+```
+
+Same result. Rather than using base R `replicate()` to do this many times, let's practice with `purrr::map_dbl()` instead (see [here](https://purrr.tidyverse.org/reference/rerun.html) for details).
+
+```{r, fig.width = 3.25, fig.height = 3}
+set.seed(4)
+growth <- 
+  tibble(growth = map_dbl(1:10000, ~ prod(1 + runif(12, 0, 0.1))))
+ggplot(data = growth, aes(x = growth)) +
+  geom_density()
+```
+
+"The smaller the effect of each locus, the better this additive approximation will be" (p. 74). Let's compare big and small.
+
+```{r, fig.width = 6, fig.height = 2.5}
+# simulate
+set.seed(4)
+samples <-
+  tibble(big   = map_dbl(1:10000, ~ prod(1 + runif(12, 0, 0.5))),
+         small = map_dbl(1:10000, ~ prod(1 + runif(12, 0, 0.01)))) %>% 
+  # wrangle
+  gather(distribution, samples) 
+# plot
+samples %>% 
+  ggplot(aes(x = samples)) +
+  geom_density(fill = "black", color = "transparent") +
+  facet_wrap(~distribution, scales = "free") 
+```
+
+Yep, the `small` samples were more Gaussian.
+
+### Normal by log-multiplication.
+
+Instead of saving our tibble, we'll just feed it directly into our plot.
+
+```{r, fig.width = 3.25, fig.height = 3}
+set.seed(4)
+tibble(samples = map_dbl(1:1e4, ~ log(prod(1 + runif(12, 0, 0.5))))) %>% 
+  ggplot(aes(x = samples)) +
+  geom_density(color = "transparent", 
+               fill = "gray33")
+```
+
+What we did was really compact. Walking it out a bit, here’s what we all did within the second argument within `map_dbl()` (i.e., everything within `log()`). 
+
+```{r}
+tibble(a   = runif(12, 0, 0.5),
+       b   = 1) %>% 
+  mutate(c = a + b) %>% 
+  summarise(p = prod(c) %>% log())
+```
+
+And based on the first argument within `map_dbl()`, we did that 10,000 times, after which we converted the results to a tibble and then fed those data into ggplot2.
+
+### Using Gaussian distributions.
+
+I really like these justifications.
+
+#### Ontological justification.
+
+The Gaussian is
+
+> a widespread pattern, appearing again and again at different scales and in different domains. Measurement errors, variations in growth, and the velocities of molecules all tend towards Gaussian distributions. These processes do this because at their heart, these processes add together fluctuations. And repeatedly adding finite fluctuations results in a distribution of sums that have shed all information about the underlying process, aside from mean and spread.
+>
+> One consequence of this is that statistical models based on Gaussian distributions cannot reliably identify micro-process... (p. 75)
+But they can still be useful.
+
+#### Epistemological justification.
+
+> Another route to justifying the Gaussian as our choice of skeleton, and a route that will help us appreciate later why it is often a poor choice, is that it represents a particular state of ignorance. When all we know or are willing to say about a distribution of measures (measures are continuous values on the real number line) is their mean and variance, then the Gaussian distribution arises as the most consistent with our assumptions.
+>
+> That is to say that the Gaussian distribution is the most natural expression of our state of ignorance, because if all we are willing to assume is that a measure has finite variance, the Gaussian distribution is the shape that can be realized in the largest number of ways and does not introduce any new assumptions. It is the least surprising and least informative assumption to make. In this way, the Gaussian is the distribution most consistent with our assumptions… If you don’t think the distribution should be Gaussian, then that implies that you know something else that you should tell your golem about, something that would improve inference. (pp. 75--76)
+In the **Overthinking: Gaussian distribution** box that follows, McElreath gave the formula. Let $y$ be the criterion, $\mu$ be the mean, and $\sigma$ be the standard deviation. Then the probability density of some Gaussian value $y$ is
+
+$$p(y|\mu, \sigma) = \frac{1}{\sqrt{2 \pi \sigma^2}} \text{exp} \Bigg (- \frac{(y - \mu)^2}{2 \sigma^2} \Bigg)$$
+
+## A language for describing models
+
+Our mathy ways of summarizing models will be something like
+
+$$
+\begin{eqnarray}
+\text{criterion}_i & \sim & \text{Normal}(\mu_i, \sigma) \\
+\mu_i & = & \beta \times \text{predictor}_i \\
+\beta & \sim & \text{Normal}(0, 10) \\
+\sigma & \sim & \text{HalfCauchy}(0, 1)
+\end{eqnarray}
+$$
+
+And as McElreath then followed up with, "If that doesn't make much sense, good. That indicates that you are holding the right textbook" (p. 77). Welcome applied statistics!
+
+### Re-describing the globe tossing model.
+
+For the globe tossing model, the probability $p$ of a count of water $w$ based on $n$ trials was
+
+$$
+\begin{eqnarray}
+w & \sim & \text{Binomial}(n, p) \\
+p & \sim & \text{Uniform}(0, 1)
+\end{eqnarray}
+$$
+
+We can break McElreath's R code 4.6 down a little bit with a tibble like so.
+
+```{r}
+# how many `p_grid` points would you like?
+n_points <- 100
+d <-
+  tibble(w          = 6, 
+         n          = 9,
+         p_grid     = seq(from = 0, to = 1, length.out = n_points)) %>% 
+  mutate(prior      = dunif(p_grid, 0, 1),
+         likelihood = dbinom(w, n, p_grid)) %>% 
+  mutate(posterior  = likelihood * prior / sum(likelihood * prior))
+head(d)
+```
+
+In case you were curious, here's what they look like:
+
+```{r, fig.width = 8, fig.height = 2.25}
+d %>% 
+  select(-w, -n) %>% 
+  gather(key, value, -p_grid) %>% 
+  # this line allows us to dictate the order the panels will appear in
+  mutate(key = factor(key, levels = c("prior", "likelihood", "posterior"))) %>% 
+  
+  ggplot(aes(x = p_grid, ymin = 0, ymax = value, fill = key)) +
+  geom_ribbon() +
+  scale_fill_manual(values = c("blue", "red", "purple")) +
+  scale_y_continuous(NULL, breaks = NULL) +
+  theme(legend.position = "none") +
+  facet_wrap(~key, scales = "free")
+```
+
+The posterior is a combination of the prior and the likelihood. And when the prior is flat across the parameter space, the posterior is just the likelihood re-expressed as a probability. As we go along, you'll see that we almost never use flat priors.
+
+## A Gaussian model of height
+
+> There are an infinite number of possible Gaussian distributions. Some have small means. Others have large means. Some are wide, with a large $\sigma$. Others are narrow. We want our Bayesian machine to consider every possible distribution, each defined by a combination of $\mu$ and $\sigma$, and rank them by posterior plausibility. (p. 79)
+### The data.
+
+Let's get the data from McElreath's [rethinking package](http://xcelab.net/rm/statistical-rethinking/).
+
+```{r, message = F}
+library(rethinking)
+data(Howell1)
+d <- Howell1
+```
+
+Here we open our main statistical package, Bürkner's [brms](https://github.com/paul-buerkner/brms). But before we do, we'll need to detach the rethinking package. R will not allow users to use a function from one package that shares the same name as a different function from another package if both packages are open at the same time. The rethinking and brms packages are designed for similar purposes and, unsurprisingly, overlap in the names of their functions. To prevent problems, we will always make sure rethinking is detached before using brms. To learn more on the topic, see [this R-bloggers post](https://www.r-bloggers.com/r-and-package-masking-a-real-life-example/).
+
+```{r, message = F}
+rm(Howell1)
+detach(package:rethinking, unload = T)
+library(brms)
+```
+
+Go ahead and investigate the data with `str()`, the tidyverse analogue for which is `glimpse()`.
+
+```{r}
+d %>%
+  str()
+```
+
+Here are the `height` values.
+
+```{r}
+d %>%
+  select(height) %>%
+  head()
+```
+
+We can use `filter()` to make an adults-only data frame.
+
+```{r}
+d2 <- 
+  d %>%
+  filter(age >= 18)
+```
+
+#### Overthinking: Data frames.
+
+This probably reflects my training history, but the structure of a data frame seems natural and inherently appealing, to me. So I can't relate to the "annoying" comment. But if you're in the other camp, do check out either of these two data wrangling talks ([here](https://www.youtube.com/watch?v=4MfUCX_KpdE&t=23s&frags=pl%2Cwn) and [here](https://www.youtube.com/watch?v=GapSskrtUzU&t=1249s&frags=pl%2Cwn)) by the ineffable [Jenny Bryan](https://twitter.com/JennyBryan?ref_src=twsrc%5Egoogle%7Ctwcamp%5Eserp%7Ctwgr%5Eauthor).
+
+#### Overthinking: Index magic.
+
+For more on indexing, check out [chapter 9](https://bookdown.org/rdpeng/rprogdatascience/subsetting-r-objects.html) of Roger Peng's *R Programming for Data Science* or even the [Subsetting](http://r4ds.had.co.nz/vectors.html#subsetting-1) subsection from *R4DS*.
+
+### The model. 
+
+The likelihood for our model is 
+
+$$h_i \sim \text{Normal}(\mu, \sigma)$$
+
+Our $\mu$ prior will be
+
+$$\mu \sim \text{Normal}(178, 20)$$
+
+And our prior for $\sigma$ will be
+
+$$\sigma \sim \text{Uniform}(0, 50)$$
+
+Here's the shape of the prior for $\mu$ in $N(178, 20)$.
+
+```{r, fig.width = 3, fig.height = 2.5}
+ggplot(data = tibble(x = seq(from = 100, to = 250, by = .1)), 
+       aes(x = x, y = dnorm(x, mean = 178, sd = 20))) +
+  geom_line() +
+  ylab("density")
+```
+
+And here's the ggplot2 code for our prior for $\sigma$, a uniform distribution with a minimum value of 0 and a maximum value of 50. We don't really need the y axis when looking at the shapes of a density, so we'll just remove it with `scale_y_continuous()`.
+
+```{r, fig.width = 3, fig.height = 2.5}
+tibble(x = seq(from = -10, to = 60, by = .1)) %>%
+  
+  ggplot(aes(x = x, y = dunif(x, min = 0, max = 50))) +
+  geom_line() +
+  scale_y_continuous(NULL, breaks = NULL) +
+  theme(panel.grid = element_blank())
+```
+
+We can simulate from both priors at once to get a prior probability distribution of `heights`.
+
+```{r, fig.width = 3, fig.height = 2.5}
+n <- 1e4
+set.seed(4)
+tibble(sample_mu    = rnorm(n, mean = 178,       sd = 20),
+       sample_sigma = runif(n, min = 0,         max = 50)) %>% 
+  mutate(x          = rnorm(n, mean = sample_mu, sd = sample_sigma)) %>% 
+  
+  ggplot(aes(x = x)) +
+  geom_density(fill = "black", size = 0) +
+  scale_y_continuous(NULL, breaks = NULL) +
+  labs(subtitle = expression(paste("Prior predictive distribution for ", italic(h[i]))),
+       x        = NULL) +
+  theme(panel.grid = element_blank())
+```
+
+As McElreath wrote, we've made a "vaguely bell-shaped density with thick tails. It is the expected distribution of heights, averaged over the prior" (p. 83).
+
+### Grid approximation of the posterior distribution. 
+
+As McElreath explained, you'll never use this for practical data analysis. But I found this helped me better understanding what exactly we're doing with Bayesian estimation. So let's play along.
+
+```{r}
+n <- 200
+d_grid <-
+  tibble(mu    = seq(from = 140, to = 160, length.out = n),
+         sigma = seq(from = 4,   to = 9,   length.out = n)) %>% 
+  # we'll accomplish with `tidyr::expand()` what McElreath did with base R `expand.grid()`
+  expand(mu, sigma)
+head(d_grid)
+```
+
+`d_grid` contains every combination of `mu` and `sigma` across their specified values. Instead of base R `sapply()`, we'll do the computateions by making a custom function which we'll plug into `purrr::map2().`
+
+```{r}
+grid_function <- function(mu, sigma){
+  dnorm(d2$height, mean = mu, sd = sigma, log = T) %>% 
+    sum()
+}
+```
+
+Now we're ready to complete the tibble.
+
+```{r}
+d_grid <-
+  d_grid %>% 
+  mutate(log_likelihood = map2(mu, sigma, grid_function)) %>% 
+  unnest() %>% 
+  mutate(prior_mu       = dnorm(mu,    mean = 178, sd  = 20, log = T),
+         prior_sigma    = dunif(sigma, min  = 0,   max = 50, log = T)) %>% 
+  mutate(product        = log_likelihood + prior_mu + prior_sigma) %>% 
+  mutate(probability    = exp(product - max(product)))
+  
+head(d_grid)
+```
+
+In the final `d_grid`, the `probability` vector contains the posterior probabilities across values of `mu` and `sigma`. We can make a contour plot with `geom_contour()`.
+
+```{r, fig.width = 4, fig.height = 3.5}
+d_grid %>% 
+  ggplot(aes(x = mu, y = sigma, z = probability)) + 
+  geom_contour() +
+  labs(x = expression(mu),
+       y = expression(sigma)) +
+  coord_cartesian(xlim = range(d_grid$mu),
+                  ylim = range(d_grid$sigma)) +
+  theme(panel.grid = element_blank())
+```
+
+We'll make our heat map with `geom_raster(aes(fill = probability))`.
+
+```{r, fig.width = 5, fig.height = 3.5}
+d_grid %>% 
+  ggplot(aes(x = mu, y = sigma)) + 
+  geom_raster(aes(fill = probability),
+              interpolate = T) +
+  scale_fill_viridis_c(option = "A") +
+  labs(x = expression(mu),
+       y = expression(sigma)) +
+  theme(panel.grid = element_blank())
+```
+
+### Sampling from the posterior.
+
+We can use `dplyr::sample_n()` to sample rows, with replacement, from `d_grid`.
+
+```{r, fig.width = 4, fig.height = 3.5}
+set.seed(4)
+d_grid_samples <- 
+  d_grid %>% 
+  sample_n(size = 1e4, replace = T, weight = probability)
+d_grid_samples %>% 
+  ggplot(aes(x = mu, y = sigma)) + 
+  geom_point(size = .9, alpha = 1/15) +
+  scale_fill_viridis_c() +
+  labs(x = expression(mu[samples]),
+       y = expression(sigma[samples])) +
+  theme(panel.grid = element_blank())
+```
+
+We can use `gather()` and then `facet_warp()` to plot the densities for both `mu` and `sigma` at once.
+
+```{r, fig.width = 6, fig.height = 2.5}
+d_grid_samples %>% 
+  select(mu, sigma) %>% 
+  gather() %>% 
+  ggplot(aes(x = value)) + 
+  geom_density(fill = "grey33", size = 0) +
+  scale_y_continuous(NULL, breaks = NULL) +
+  xlab(NULL) +
+  theme(panel.grid = element_blank()) +
+  facet_wrap(~key, scales = "free")
+```
+
+We'll use the tidybayes package to compute their posterior modes and 95% HDIs.
+
+```{r, warning = F, message = F}
+library(tidybayes)
+d_grid_samples %>% 
+  select(mu, sigma) %>% 
+  gather() %>% 
+  group_by(key) %>% 
+  mode_hdi(value)
+```
+
+Let's say you wanted their posterior medians and 50% quantile-based intervals, instead. Just switch out the last line for `median_qi(value, .width = .5)`.
+
+#### Overthinking: Sample size and the normality of $\sigma$'s posterior.
+
+Since we'll be fitting models with brms almost exclusively from here on out, this section is largely mute. But we'll do it anyway for the sake of practice. I'm going to break the steps up like before rather than compress the code together. Here's `d3`.
+
+```{r}
+set.seed(4)
+(d3 <- sample(d2$height, size = 20))
+```
+
+For our first step using `d3`, we'll redefine `d_grid`.
+
+```{r}
+n <- 200
+# note we've redefined the ranges of `mu` and `sigma`
+d_grid <-
+  tibble(mu    = seq(from = 150, to = 170, length.out = n),
+         sigma = seq(from = 4,   to = 20,  length.out = n)) %>% 
+  expand(mu, sigma)
+```
+
+Second, we'll redefine our custom `grid_function()` function to operate over the `height` values of `d3`.
+
+```{r}
+grid_function <- function(mu, sigma){
+  dnorm(d3, mean = mu, sd = sigma, log = T) %>% 
+    sum()
+}
+```
+
+Now we'll use the amended `grid_function()` to make the posterior.
+
+```{r}
+d_grid <-
+  d_grid %>% 
+  mutate(log_likelihood = map2_dbl(mu, sigma, grid_function)) %>% 
+  mutate(prior_mu       = dnorm(mu,    mean = 178, sd  = 20, log = T),
+         prior_sigma    = dunif(sigma, min  = 0,   max = 50, log = T)) %>% 
+  mutate(product        = log_likelihood + prior_mu + prior_sigma) %>% 
+  mutate(probability    = exp(product - max(product)))
+```
+
+Did you catch our use of `purrr::map2_dbl()`, there, in place of `purrr::map2()`? It turns out that `purrr::map()` and `purrr::map2()` always return a list (see [here](https://purrr.tidyverse.org/reference/map.html) and [here](https://purrr.tidyverse.org/reference/map2.html)). But as [Phil Straforelli](https://twitter.com/PStrafo) kindly [pointed out](https://twitter.com/PStrafo/status/1046853175917961217), we can add the `_dbl` suffix to those functions, which will instruct the purrr package to return a double vector (i.e., a [common kind of numeric vector](http://r4ds.had.co.nz/vectors.html#important-types-of-atomic-vector)). The advantage of that approach is we no longer need to follow our `map()` or `map2()` lines with `unnest()`. To learn more about the ins and outs of the `map()` family, check out [this section](http://r4ds.had.co.nz/iteration.html#the-map-functions) from *R4DS* or Jenny Bryan's [*purrr tutorial*](https://jennybc.github.io/purrr-tutorial/).
+
+Next we'll `sample_n()` and plot.
+
+```{r, fig.width = 4, fig.height = 3.5}
+set.seed(4)
+d_grid_samples <- 
+  d_grid %>% 
+  sample_n(size = 1e4, replace = T, weight = probability)
+d_grid_samples %>% 
+  ggplot(aes(x = mu, y = sigma)) + 
+  geom_point(size = .9, alpha = 1/15) +
+  scale_fill_viridis_c() +
+  labs(x = expression(mu[samples]),
+       y = expression(sigma[samples])) +
+  theme(panel.grid = element_blank())
+```
+
+Behold the updated densities.
+
+```{r, fig.width = 6, fig.height = 2.5}
+d_grid_samples %>% 
+  select(mu, sigma) %>% 
+  gather() %>% 
+  ggplot(aes(x = value)) + 
+  geom_density(fill = "grey33", size = 0) +
+  scale_y_continuous(NULL, breaks = NULL) +
+  xlab(NULL) +
+  theme(panel.grid = element_blank()) +
+  facet_wrap(~key, scales= "free")
+```
+
+Sigma's not so Gaussian with that small $n$.
+
+## Reference {-}
+
+[McElreath, R. (2016). *Statistical rethinking: A Bayesian course with examples in R and Stan.* Chapman & Hall/CRC Press.](https://xcelab.net/rm/statistical-rethinking/)
+
+## Session info {-}
+
+```{r}
+sessionInfo()
+```
+
+```{r, warning = F, echo = F}
+rm(list = ls())
+```
+
+```{r, echo = F, message = F, warning = F, results = "hide"}
+pacman::p_unload(pacman::p_loaded(), character.only = TRUE)
+ggplot2::theme_set(ggplot2::theme_grey())
+bayesplot::color_scheme_set("blue")
+```
+
